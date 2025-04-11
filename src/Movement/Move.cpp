@@ -1188,6 +1188,8 @@ void Move::StartSimulationLogging(String<StringLength256>& reply) noexcept
 
     const char* header = "t,X,Y,Z\n";
     simulationFile->Write(header, strlen(header));
+    simulationFile->Flush();
+    simulationFile->Close();
     lastSimulationSampleTime = 0;
     simulationLoggingEnabled = true;
     reply.printf("Started simulation logging to simulation_data.csv with timestep %.3f s", (double)simulationTimestep);
@@ -1201,11 +1203,12 @@ void Move::StopSimulationLogging() noexcept
         simulationFile = nullptr;
     }
     simulationLoggingEnabled = false;
+    debugPrintf("Finished Simulation Logging to simulation_data.csv");
 }
 
-void Move::LogSimulationData(uint32_t currentTime) noexcept
-{
+void Move::LogSimulationData(uint32_t currentTime) noexcept {
     if (!simulationLoggingEnabled || simulationFile == nullptr) {
+        debugPrintf("Logging disabled or file null\n");
         return;
     }
 
@@ -1213,6 +1216,7 @@ void Move::LogSimulationData(uint32_t currentTime) noexcept
     float coords[MaxAxes];
     GetCurrentMachinePosition(coords, 0);
 
+    debugPrintf("Attempting to create line for CSV\n");
     String<StringLength256> line;
     line.printf("%.6f,%.3f,%.3f,%.3f\n",
                 (double)timeInSeconds,
@@ -1220,7 +1224,11 @@ void Move::LogSimulationData(uint32_t currentTime) noexcept
                 (double)coords[Y_AXIS],
                 (double)coords[Z_AXIS]);
 
-    simulationFile->Write(line.c_str(), line.strlen());
+    if (!simulationFile->Write(line.c_str(), line.strlen())) {
+        debugPrintf("Failed to write to simulation_data.csv: %s\n", line.c_str());
+    } else{
+    	debugPrintf("Successfully wrote to simulation_data.csv: %s\n", line.c_str());
+    }
 }
 
 // Adjust the leadscrews
