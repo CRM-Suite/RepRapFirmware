@@ -265,90 +265,92 @@ bool GCodes::WriteWorkplaceCoordinates(FileStore *f) const noexcept
 
 // Handle M37 to simulate a whole file
 GCodeResult GCodes::SimulateFile(GCodeBuffer& gb, const StringRef &reply, const StringRef& file, bool updateFile) THROWS(GCodeException)
-{
-	if (reprap.GetPrintMonitor().IsPrinting())
-	{
-		reply.copy("cannot simulate while a file is being printed");
-		return GCodeResult::error;
-	}
-
-# if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
-	if (
-#  if HAS_SBC_INTERFACE
-		reprap.UsingSbcInterface() ||
-#  endif
-		QueueFileToPrint(file.c_str(), reply))
-# endif
-	{
-		if (!IsSimulating())
 		{
-			// Ensure that lastKnownEndpoints is up to date with the current endpoints for drives that are owned and may have been moved
-			// Also save the current tool for each machine state, the feed rate, and job file position (if any)
-			// It is convenient to use a RestorePoint to save these, however we don't make use of the coordinates in the RestorePoint when the simulation ends, so we could use a smaller struct instead
-			for (MovementState& ms : moveStates)
-			{
-				ms.SaveOwnDriveCoordinates();
-				ms.SavePosition(SimulationRestorePointNumber, numVisibleAxes, gb.LatestMachineState().feedRate, gb.GetJobFilePosition());
-			}
+		    if (reprap.GetPrintMonitor().IsPrinting())
+		    {
+		        reply.copy("cannot simulate while a file is being printed");
+		        return GCodeResult::error;
+		    }
 
-			// Now that lastKnownEndpoints is up to date, save it
-			MovementState::RestoreEndpointsAfterSimulating();
+		#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+		    if (
+		#if HAS_SBC_INTERFACE
+		        reprap.UsingSbcInterface() ||
+		#endif
+		        QueueFileToPrint(file.c_str(), reply))
+		    {
+		        if (!IsSimulating())
+		        {
+		            for (MovementState& ms : moveStates)
+		            {
+		                ms.SaveOwnDriveCoordinates();
+		                ms.SavePosition(SimulationRestorePointNumber, numVisibleAxes, gb.LatestMachineState().feedRate, gb.GetJobFilePosition());
+		            }
+		            MovementState::RestoreEndpointsAfterSimulating();
+		            axesVirtuallyHomed = AxesBitmap::MakeLowestNBits(numVisibleAxes);
+		        }
+		        simulationTime = 0.0;
+		        exitSimulationWhenFileComplete = true;
+		#if HAS_SBC_INTERFACE
+		        updateFileWhenSimulationComplete = updateFile && !reprap.UsingSbcInterface();
+		#else
+		        updateFileWhenSimulationComplete = updateFile;
+		#endif
+		        simulationMode = SimulationMode::normal;
 
-			// Pretend that all axes have been homed
-			axesVirtuallyHomed = AxesBitmap::MakeLowestNBits(numVisibleAxes);
+		        // Start simulation logging
+		        String<StringLength256> logReply;
+		        reprap.GetMove().StartSimulationLogging(logReply);
+		        reply.catf("\n%s", logReply.c_str()); // Append logging status to reply
+
+		        reprap.GetMove().Simulate(simulationMode);
+		        reprap.GetPrintMonitor().StartingPrint(file.c_str());
+		        StartPrinting(true);
+		        reply.printf("Simulating print of file %s", file.c_str());
+		        return GCodeResult::ok;
+		    }
+		#endif
+
+		    return GCodeResult::error;
 		}
-		simulationTime = 0.0;
-		exitSimulationWhenFileComplete = true;
-# if HAS_SBC_INTERFACE
-		updateFileWhenSimulationComplete = updateFile && !reprap.UsingSbcInterface();
-# else
-		updateFileWhenSimulationComplete = updateFile;
-# endif
-		simulationMode = SimulationMode::normal;
-		reprap.GetMove().Simulate(simulationMode);
-		reprap.GetPrintMonitor().StartingPrint(file.c_str());
-		StartPrinting(true);
-		reply.printf("Simulating print of file %s", file.c_str());
-		return GCodeResult::ok;
-	}
-
-	return GCodeResult::error;
-}
 
 // Handle M37 to change the simulation mode
 GCodeResult GCodes::ChangeSimulationMode(GCodeBuffer& gb, const StringRef &reply, SimulationMode newSimMode) THROWS(GCodeException)
 {
-	if (newSimMode != simulationMode)
-	{
-		if (!LockAllMovementSystemsAndWaitForStandstill(gb))
-		{
-			return GCodeResult::notFinished;
-		}
-
-		if (newSimMode == SimulationMode::off)
-		{
-			EndSimulation(&gb);
-		}
-		else
-		{
-			if (!IsSimulating())
-			{
-				// Starting a new simulation, so save the current position
-				axesVirtuallyHomed = AxesBitmap::MakeLowestNBits(numVisibleAxes);	// pretend all axes are homed
-				for (MovementState& ms : moveStates)
-				{
-					ms.SaveOwnDriveCoordinates();
-					ms.SavePosition(SimulationRestorePointNumber, numVisibleAxes, gb.LatestMachineState().feedRate, gb.GetJobFilePosition());
-				}
-				MovementState::SaveEndpointsBeforeSimulating();
-			}
-			simulationTime = 0.0;
-		}
-		exitSimulationWhenFileComplete = updateFileWhenSimulationComplete = false;
-		simulationMode = newSimMode;
-		reprap.GetMove().Simulate(newSimMode);
-	}
-	return GCodeResult::ok;
+    if (newSimMode != simulationMode)
+    {
+        if (!LockAllMovementSystemsAndWaitForStandstill(gb))
+        {
+            return GCodeResult::notFinished;
+        }
+        if (newSimMode == SimulationMode::off)
+        {
+            EndSimulation(&gb);
+        }
+        else
+        {
+            if (!IsSimulating())
+            {
+                axesVirtuallyHomed = AxesBitmap::MakeLowestNBits(numVisibleAxes);
+                for (MovementState& ms : moveStates)
+                {
+                    ms.SaveOwnDriveCoordinates();
+                    ms.SavePosition(SimulationRestorePointNumber, numVisibleAxes, gb.LatestMachineState().feedRate, gb.GetJobFilePosition());
+                }
+                MovementState::SaveEndpointsBeforeSimulating();
+            }
+            simulationTime = 0.0;
+            if (newSimMode == SimulationMode::debug) {
+                String<StringLength256> logReply;
+                reprap.GetMove().StartSimulationLogging(logReply);
+                reply.cat(logReply.c_str());
+            }
+        }
+        exitSimulationWhenFileComplete = updateFileWhenSimulationComplete = false;
+        simulationMode = newSimMode;
+        reprap.GetMove().Simulate(newSimMode);
+    }
+    return GCodeResult::ok;
 }
 
 #endif

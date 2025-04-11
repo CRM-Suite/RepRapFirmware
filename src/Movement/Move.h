@@ -128,6 +128,11 @@ public:
 	void EmergencyDisableDrivers() noexcept;
 	void SetDriversIdle() noexcept;
 
+	void Simulate(SimulationMode simMode) noexcept;
+	void StartSimulationLogging(String<StringLength256>& reply) noexcept;  // Now public
+	void StopSimulationLogging() noexcept;  // Likely already public or should be
+	void LogSimulationData(uint32_t currentTime) noexcept;  // If used externally, make public too
+
 	GCodeResult ConfigureLocalDriver(GCodeBuffer& gb, const StringRef& reply, uint8_t drive) THROWS(GCodeException);	// Deal with M569 for one local driver
 	GCodeResult ConfigureLocalDriverBasicParameters(GCodeBuffer& gb, const StringRef& reply, uint8_t drive) THROWS(GCodeException)
 		pre(drive < GetNumActualDirectDrivers());														// Deal with M569.0 for one local driver
@@ -372,7 +377,6 @@ public:
 	float IdleTimeout() const noexcept;														// Returns the idle timeout in seconds
 	void SetIdleTimeout(float timeout) noexcept;											// Set the idle timeout in seconds
 
-	void Simulate(SimulationMode simMode) noexcept;											// Enter or leave simulation mode
 	float GetSimulationTime() const noexcept { return rings[0].GetSimulationTime(); }		// Get the accumulated simulation time
 
 	bool PausePrint(MovementState& ms) noexcept;											// Pause the print as soon as we can, returning true if we were able to
@@ -510,6 +514,11 @@ private:
 		haveError,		// had an error, movement is stopped
 		resetting		// had an error, ready to reset it
 	};
+
+	FileStore* simulationFile = nullptr;
+	uint32_t lastSimulationSampleTime = 0;
+	float simulationTimestep = 0.001;
+	bool simulationLoggingEnabled = false;
 
 #if SUPPORT_SCANNING_PROBES
 	struct ScanningProbeControl

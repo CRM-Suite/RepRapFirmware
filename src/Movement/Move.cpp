@@ -706,7 +706,12 @@ void Move::Exit() noexcept
 		}
 
 		// Let ring 0 process moves
-		uint32_t nextPrepareDelay = rings[0].Spin(simulationMode, !canAddRing0Move, millis() - whenLastMoveAdded[0] >= rings[0].GetGracePeriod());
+		// When there is a gap between moves it can be that we try to prepare the second move while a segment of the first move that has been delayed by input shaping is still executing.
+		// To avoid this we must ensure that we prepare moves at least half an input shaper period in advance. This avoids the problem because any delayed segment of the first move
+		// will be half a shaper period long. In order to handle CAN delays etc. we prepare moves [half a shaper period plus MoveTiming::AbsoluteMinimumPreparedTime] in advance,
+		// with a minimum of MoveTiming::UsualMinimumPreparedTime.
+		const uint32_t prepareAdvanceTime = max<uint32_t>(axisShaper.GetImpulseDelay(0) + MoveTiming::AbsoluteMinimumPreparedTime, MoveTiming::UsualMinimumPreparedTime);
+		uint32_t nextPrepareDelay = rings[0].Spin(prepareAdvanceTime, simulationMode, !canAddRing0Move, millis() - whenLastMoveAdded[0] >= rings[0].GetGracePeriod());
 
 #if SUPPORT_ASYNC_MOVES
 		const bool canAddRing1Move = rings[1].CanAddMove();
@@ -758,7 +763,7 @@ void Move::Exit() noexcept
 			}
 		}
 
-		const uint32_t auxPrepareDelay = rings[1].Spin(simulationMode, !canAddRing1Move,  millis() - whenLastMoveAdded[1] >= rings[1].GetGracePeriod());
+		const uint32_t auxPrepareDelay = rings[1].Spin(prepareAdvanceTime, simulationMode, !canAddRing1Move,  millis() - whenLastMoveAdded[1] >= rings[1].GetGracePeriod());
 		if (auxPrepareDelay < nextPrepareDelay)
 		{
 			nextPrepareDelay = auxPrepareDelay;
@@ -767,12 +772,15 @@ void Move::Exit() noexcept
 
 		if (simulationMode == SimulationMode::debug && reprap.GetDebugFlags(Module::Move).IsBitSet(MoveDebugFlags::SimulateSteppingDrivers))
 		{
-			while (activeDMs != nullptr)
-			{
-				SimulateSteppingDrivers(reprap.GetPlatform());
-			}
+		    while (activeDMs != nullptr)
+		    {
+		        SimulateSteppingDrivers(reprap.GetPlatform());
+		    }
+		    if (rings[0].IsIdle())
+		    {
+		        StopSimulationLogging();
+		    }
 		}
-
 		// Reduce motor current to standby if the rings have been idle for long enough
 		if (   rings[0].IsIdle()
 #if SUPPORT_ASYNC_MOVES
@@ -1162,6 +1170,57 @@ void Move::Simulate(SimulationMode simMode) noexcept
 	{
 		rings[0].ResetSimulationTime();
 	}
+}
+
+void Move::StartSimulationLogging(String<StringLength256>& reply) noexcept
+{
+    if (simulationFile != nullptr) {
+        reply.copy("Simulation logging already active");
+        return;
+    }
+
+    simulationFile = reprap.GetPlatform().OpenFile("0:/sys", "simulation_data.csv", OpenMode::write, 0);
+    if (simulationFile == nullptr) {
+        reply.copy("Failed to open simulation_data.csv for writing");
+        simulationLoggingEnabled = false;
+        return;
+    }
+
+    const char* header = "t,X,Y,Z\n";
+    simulationFile->Write(header, strlen(header));
+    lastSimulationSampleTime = 0;
+    simulationLoggingEnabled = true;
+    reply.printf("Started simulation logging to simulation_data.csv with timestep %.3f s", (double)simulationTimestep);
+}
+
+void Move::StopSimulationLogging() noexcept
+{
+    if (simulationFile != nullptr) {
+        simulationFile->Close();
+        delete simulationFile;
+        simulationFile = nullptr;
+    }
+    simulationLoggingEnabled = false;
+}
+
+void Move::LogSimulationData(uint32_t currentTime) noexcept
+{
+    if (!simulationLoggingEnabled || simulationFile == nullptr) {
+        return;
+    }
+
+    float timeInSeconds = (float)currentTime / (float)StepClockRate;
+    float coords[MaxAxes];
+    GetCurrentMachinePosition(coords, 0);
+
+    String<StringLength256> line;
+    line.printf("%.6f,%.3f,%.3f,%.3f\n",
+                (double)timeInSeconds,
+                (double)coords[X_AXIS],
+                (double)coords[Y_AXIS],
+                (double)coords[Z_AXIS]);
+
+    simulationFile->Write(line.c_str(), line.strlen());
 }
 
 // Adjust the leadscrews
@@ -2798,12 +2857,25 @@ void Move::SimulateSteppingDrivers(Platform& p) noexcept
 			dmToInsert = nextToInsert;
 		}
 		TaskBase::SetCurrentTaskPriority(oldPriority);
+
+		if (simulationLoggingEnabled)
+		{
+		    uint32_t timeSinceLastSample = dueTime - lastSimulationSampleTime;
+		    uint32_t timestepClocks = (uint32_t)(simulationTimestep * StepClockRate);
+		    if (timeSinceLastSample >= timestepClocks)
+		    {
+		        LogSimulationData(dueTime);
+		        lastSimulationSampleTime = dueTime;
+		    }
+		}
+
 	}
 
 	if (activeDMs == nullptr)
 	{
 		checkTiming = false;		// don't check the timing of the first step in the next move
 	}
+
 }
 
 // This is called when we abort a move because we have hit an endstop.
