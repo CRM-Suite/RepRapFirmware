@@ -781,10 +781,11 @@ void Move::Exit() noexcept
 	    		// debugPrintf("ActiveDMS high %p\n", (void*)activeDMs);
 	    		SimulateSteppingDrivers(reprap.GetPlatform());
 	    	}
-			if (rings[0].IsIdle())
-			{
-				StopSimulationLogging();
-			}
+			// if (rings[0].IsIdle())
+			// {	
+			// 	debugPrintf("WE STOPPED LOGGING!!");
+			// 	StopSimulationLogging();
+			// }
 	    }
 
 		// Reduce motor current to standby if the rings have been idle for long enough
@@ -1184,6 +1185,7 @@ void Move::StartSimulationLogging(String<StringLength256>& reply) noexcept
     if (!simulationLoggingEnabled)
     {
         simulationLoggingEnabled = true;
+        positionLoggingEnabled = true;
         lastSimulationSampleTime = 0;
         simulationTimestep = 0.01f;
 
@@ -1194,13 +1196,13 @@ void Move::StartSimulationLogging(String<StringLength256>& reply) noexcept
             positionLoggingEnabled = true;
             positionLogFile->Write("Time(s),X(mm),Y(mm),Z(mm)\n");
             positionLogFile->Flush();
-            reply.printf("Started simulation position logging to 0:/sys/simulation_positions.csv");
+            debugPrintf("Started simulation position logging to 0:/sys/simulation_positions.csv\n");
             reprap.GetPlatform().MessageF(GenericMessage, "Simulation logging enabled\n");
         }
         else
         {
             positionLoggingEnabled = false;
-            reply.printf("Failed to open simulation_positions.csv for writing");
+            debugPrintf("Failed to open simulation_positions.csv for writing");
             reprap.GetPlatform().MessageF(WarningMessage, "Failed to open CSV file\n");
         }
 
@@ -1209,14 +1211,15 @@ void Move::StartSimulationLogging(String<StringLength256>& reply) noexcept
     }
     else
     {
-        reply.printf("Simulation logging already active");
+    	debugPrintf("Simulation logging already active");
     }
 }
 
 // new function
 void Move::StopSimulationLogging() noexcept
 {
-    if (simulationLoggingEnabled)
+//    if (simulationLoggingEnabled)
+	if (true)
     {
         simulationLoggingEnabled = false;
         positionLoggingEnabled = false;
@@ -1234,9 +1237,13 @@ void Move::StopSimulationLogging() noexcept
 // new function
 void Move::LogSimulationData(uint32_t currentTime) noexcept
 {
-    if (positionLoggingEnabled && positionLogFile != nullptr)
+//    if (positionLoggingEnabled && positionLogFile != nullptr)
+//	debugPrintf("LogSimulationData() entry, this = %p\n", this);
+//	debugPrintf("trying to log simulation data\n");
+	if (true)
     {
         // Calculate time in seconds
+//		debugPrintf("logging data...");
         float timeSeconds = (float)currentTime / (float)StepClockRate;
 
         // Write CSV line: Time,X,Y,Z
@@ -1246,9 +1253,15 @@ void Move::LogSimulationData(uint32_t currentTime) noexcept
                        (double)simulatedPositions[0],
                        (double)simulatedPositions[1],
                        (double)simulatedPositions[2]);
+//        debugPrintf("%.3f,%.2f,%.2f,%.2f\n",
+//                (double)timeSeconds,
+//                (double)simulatedPositions[0],
+//                (double)simulatedPositions[1],
+//                (double)simulatedPositions[2]);
         if (!positionLogFile->Write(csvLine.c_str()))
         {
             // Handle write error by stopping logging
+//        	debugPrintf("stoppign logging!!");
             positionLogFile->Close();
             positionLogFile = nullptr;
             positionLoggingEnabled = false;
@@ -1260,10 +1273,13 @@ void Move::LogSimulationData(uint32_t currentTime) noexcept
             static uint32_t lastFlushTime = 0;
             if (currentTime - lastFlushTime >= StepClockRate) // Flush every second
             {
+//            	debugPrintf("flushing");
                 positionLogFile->Flush();
                 lastFlushTime = currentTime;
             }
         }
+    } else{
+    	debugPrintf("Not actually Logging Anything\n");
     }
 }
 

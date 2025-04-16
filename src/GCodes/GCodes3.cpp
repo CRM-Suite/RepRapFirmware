@@ -327,6 +327,8 @@ GCodeResult GCodes::ChangeSimulationMode(GCodeBuffer& gb, const StringRef &reply
         }
         if (newSimMode == SimulationMode::off)
         {
+        	debugPrintf("Stopping simulation logging\n");
+        	reprap.GetMove().StopSimulationLogging();
             EndSimulation(&gb);
         }
         else
