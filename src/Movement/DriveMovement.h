@@ -165,26 +165,39 @@ private:
 // We inline this part to speed things up when we are doing double/quad/octal stepping.
 inline bool DriveMovement::CalcNextStepTime(uint32_t now) noexcept
 {
-	// We have just taken a step, so update the current motor position
-	const int32_t adjustment = (int32_t)(direction << 1) - 1;	// to avoid a conditional jump, calculate +1 or -1 according to direction
-	currentMotorPosition += adjustment;					// adjust the current position
-
-	++nextStep;
-	if (stepsTillRecalc != 0)
-	{
-		--stepsTillRecalc;								// we are doing double/quad/octal stepping
-		nextStepTime += stepInterval;
-#ifdef DUET3_MB6HC										// we need to increase the minimum step pulse length to be long enough for the TMC5160
-		asm volatile("nop");
-		asm volatile("nop");
-		asm volatile("nop");
-		asm volatile("nop");
-		asm volatile("nop");
-		asm volatile("nop");
+    if (nextStep >= segmentStepLimit)
+    {
+        // debugPrintf("CalcNextStepTime: drive %u, nextStep %d >= segmentStepLimit %d, skipping step\n",
+        //             drive, nextStep, segmentStepLimit);
+        return CalcNextStepTimeFull(now);
+    }
+    const int32_t adjustment = (int32_t)(direction << 1) - 1;
+    currentMotorPosition += adjustment;
+    ++nextStep;
+    // debugPrintf("CalcNextStepTime: drive %u, nextStep: %d, segmentStepLimit: %d, nextStepTime: %u\n",
+    //             drive, nextStep, segmentStepLimit, nextStepTime);
+    if (stepsTillRecalc != 0)
+    {
+        --stepsTillRecalc;
+        uint32_t newStepTime = nextStepTime + stepInterval;
+        if (newStepTime < nextStepTime || newStepTime > now + 1000000) // Arbitrary large bound
+        {
+            // debugPrintf("CalcNextStepTime: invalid nextStepTime %u, resetting to now %u\n",
+            //             newStepTime, now);
+            newStepTime = now;
+        }
+        nextStepTime = newStepTime;
+#ifdef DUET3_MB6HC
+        asm volatile("nop");
+        asm volatile("nop");
+        asm volatile("nop");
+        asm volatile("nop");
+        asm volatile("nop");
+        asm volatile("nop");
 #endif
-		return true;
-	}
-	return CalcNextStepTimeFull(now);
+        return true;
+    }
+    return CalcNextStepTimeFull(now);
 }
 
 // Return the number of net steps already taken for the current segment in the forwards direction. Used for filament monitoring.

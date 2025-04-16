@@ -296,7 +296,8 @@ GCodeResult GCodes::SimulateFile(GCodeBuffer& gb, const StringRef &reply, const 
 		#else
 		        updateFileWhenSimulationComplete = updateFile;
 		#endif
-		        simulationMode = SimulationMode::normal;
+//		        simulationMode = SimulationMode::normal;
+		        simulationMode = SimulationMode::debug;
 
 		        // Start simulation logging
 		        String<StringLength256> logReply;
@@ -307,6 +308,7 @@ GCodeResult GCodes::SimulateFile(GCodeBuffer& gb, const StringRef &reply, const 
 		        reprap.GetPrintMonitor().StartingPrint(file.c_str());
 		        StartPrinting(true);
 		        reply.printf("Simulating print of file %s", file.c_str());
+		        debugPrintf("Simulation mode is %d\n", (int)simulationMode); // Added debug print
 		        return GCodeResult::ok;
 		    }
 		#endif
@@ -348,6 +350,7 @@ GCodeResult GCodes::ChangeSimulationMode(GCodeBuffer& gb, const StringRef &reply
         }
         exitSimulationWhenFileComplete = updateFileWhenSimulationComplete = false;
         simulationMode = newSimMode;
+        debugPrintf("Simulation mode changed to %d\n", (int)newSimMode); // Added debug print
         reprap.GetMove().Simulate(newSimMode);
     }
     return GCodeResult::ok;

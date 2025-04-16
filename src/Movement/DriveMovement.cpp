@@ -116,6 +116,8 @@ MoveSegment *_ecv_null DriveMovement::NewSegment(uint32_t now) noexcept
 	while (true)
 	{
 		MoveSegment *_ecv_null seg = segments;					// capture volatile variable
+		// debugPrintf("NewSegment: drive %u, segment: %p, startTime: %u, now: %u, state: %u\n",
+			// drive, (void*)seg, seg ? seg->GetStartTime() : 0, now, (unsigned int)state);
 		if (seg == nullptr)
 		{
 			segmentFlags.Init();
@@ -127,6 +129,8 @@ MoveSegment *_ecv_null DriveMovement::NewSegment(uint32_t now) noexcept
 
 		if ((int32_t)(seg->GetStartTime() - now) > (int32_t)MoveTiming::MaximumMoveStartAdvanceClocks)
 		{
+			// debugPrintf("NewSegment: drive %u, segment not due, setting state to starting, nextStepTime: %u\n",
+			// 	drive, seg->GetStartTime());
 			state = DMState::starting;							// the segment is not due to start for a while. To allow it to be changed meanwhile, generate an interrupt when it is due to start.
 			driversCurrentlyUsed = 0;							// don't generate a step on that interrupt
 			driverEndstopsTriggeredAtStart = 0;					// reset since we will be setting this in DDA::Prepare()
@@ -288,6 +292,8 @@ MoveSegment *_ecv_null DriveMovement::NewSegment(uint32_t now) noexcept
 			newDcf = constrain<motioncalc_t>(newDcf, -1.0, 1.0);	// to prevent the next segment erroring out
 		}
 		distanceCarriedForwards = newDcf;
+		debugPrintf("NewSegment: drive %u, skipping segment %p, new segments %p, netStepsThisSegment: %d\n",
+			drive, (void*)seg, (void*)seg->GetNext(), netStepsThisSegment);
 		MoveSegment *oldSeg = seg;
 		segments = seg = seg->GetNext();							// skip this segment
 		MoveSegment::Release(oldSeg);
@@ -330,8 +336,12 @@ pre(stepsTillRecalc == 0; segments != nullptr)
 {
 	MoveSegment *currentSegment = segments;							// capture volatile variable
 	uint32_t shiftFactor = 0;										// assume single stepping
+	// debugPrintf("CalcNextStepTimeFull: drive %u, state: %u, nextStep: %d, segmentStepLimit: %d, segments: %p\n",
+		// drive, (unsigned int)state, nextStep, segmentStepLimit, (void*)segments);
 	{
 		int32_t stepsToLimit = segmentStepLimit - nextStep;
+		// debugPrintf("CalcNextStepTimeFull: stepsToLimit: %d, netStepsThisSegment: %d\n",
+			// stepsToLimit, netStepsThisSegment);
 		if (stepsToLimit == 1 && currentSegment->GetNext() == nullptr && !currentSegment->GetFlags().isExtruder && reverseStartStep != nextStep)
 		{
 			// It's an axis and we are soon to stop movement, so we should end on an exact microstep.
@@ -385,6 +395,8 @@ pre(stepsTillRecalc == 0; segments != nullptr)
 		// If there are no more steps left in this segment, skip to the next segment and use single stepping
 		if (stepsToLimit <= 0)
 		{
+			// debugPrintf("CalcNextStepTimeFull: advancing segment, old segment: %p, new segments: %p\n",
+			// 	(void*)currentSegment, (void*)currentSegment->GetNext());
 			distanceCarriedForwards += currentSegment->GetLength() - (motioncalc_t)netStepsThisSegment;
 			if (distanceCarriedForwards > (motioncalc_t)1.0 || distanceCarriedForwards < (motioncalc_t)-1.0)
 			{
@@ -402,6 +414,7 @@ pre(stepsTillRecalc == 0; segments != nullptr)
 			currentSegment = NewSegment(now);
 			if (currentSegment == nullptr)
 			{
+				// debugPrintf("CalcNextStepTimeFull: no more segments, drive %u set to idle\n", drive);
 				return false;										// the call to NewSegment has already set the state to idle
 			}
 
@@ -462,6 +475,8 @@ pre(stepsTillRecalc == 0; segments != nullptr)
 	{
 	case DMState::cartLinear:									// linear steady speed
 		nextCalcStepTime = (motioncalc_t)(nextStep + (int32_t)stepsTillRecalc) * p;
+		// debugPrintf("CalcNextStepTimeFull: cartLinear, q=%.4e, p=%.4e, nextCalcStepTime=%.4e\n",
+		// 	(double)q, (double)p, (double)nextCalcStepTime);
 		break;
 
 	case DMState::cartAccel:									// Cartesian accelerating
@@ -494,6 +509,7 @@ pre(stepsTillRecalc == 0; segments != nullptr)
 #if SEGMENT_DEBUG
 		debugPrintf("DMstate %u, quitting\n", (unsigned int)state);
 #endif
+		// debugPrintf("CalcNextStepTimeFull: invalid state %u\n", (unsigned int)state);
 		return LogStepError(4, (float)state, currentSegment);
 	}
 
@@ -528,6 +544,7 @@ pre(stepsTillRecalc == 0; segments != nullptr)
 		// So if this is the last step and it is late, bring it forward to the expected finish time.
 		// 2023-12-06: we now allow any step to be late but we record the maximum number.
 		// 2024-04-05: we now allow steps to be late on any segment, not just the last one, because a segment may be 0 or 1 step long and on deltas the last 2 steps may be calculated late.
+		// debugPrintf("CalcNextStepTimeFull: step late, adjusting to duration %u\n", currentSegment->GetDuration());
 		iNextCalcStepTime = currentSegment->GetDuration();
 		const int32_t nextCalcStep = nextStep + (int32_t)stepsTillRecalc;
 		const int32_t stepsLate = segmentStepLimit - nextCalcStep;
@@ -563,7 +580,8 @@ pre(stepsTillRecalc == 0; segments != nullptr)
 
 		nextStepTime = iNextCalcStepTime - (stepsTillRecalc * stepInterval);
 	}
-
+	// debugPrintf("CalcNextStepTimeFull: drive %u, nextStepTime: %u, stepInterval: %u\n",
+	// 	drive, nextStepTime, stepInterval);
 	return true;
 }
 

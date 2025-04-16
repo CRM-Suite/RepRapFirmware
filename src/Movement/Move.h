@@ -515,9 +515,11 @@ private:
 		resetting		// had an error, ready to reset it
 	};
 
+
+	// added
 	FileStore* simulationFile = nullptr;
 	uint32_t lastSimulationSampleTime = 0;
-	float simulationTimestep = 0.001;
+	float simulationTimestep = 0.01;
 	bool simulationLoggingEnabled = false;
 
 #if SUPPORT_SCANNING_PROBES
@@ -973,6 +975,7 @@ inline __attribute__((always_inline)) bool Move::ScheduleNextStepInterrupt() noe
 // Base priority must be >= NvicPriorityStep when calling this, unless we are simulating.
 inline void Move::InsertDM(DriveMovement *dm) noexcept
 {
+// debugPrintf("InsertDM: drive %u, nextDM: %p, activeDMs: %p\n", dm->drive, (void*)dm->nextDM, (void*)activeDMs);
 #if SUPPORT_PHASE_STEPPING || SUPPORT_CLOSED_LOOP
 	DriveMovement *_ecv_null *dmp = dm->state == DMState::phaseStepping ? &phaseStepDMs : &activeDMs;
 #else
@@ -984,6 +987,7 @@ inline void Move::InsertDM(DriveMovement *dm) noexcept
 	}
 	dm->nextDM = *dmp;
 	*dmp = dm;
+// debugPrintf("InsertDM after: drive %u, nextDM: %p, activeDMs: %p\n", dm->drive, (void*)dm->nextDM, (void*)activeDMs);
 }
 
 #if HAS_SMART_DRIVERS

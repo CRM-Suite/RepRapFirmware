@@ -235,8 +235,8 @@ uint32_t DDARing::Spin(uint32_t prepareAdvanceTime, SimulationMode simulationMod
 		{
 			simulationTime += (float)cdda->GetClocksNeeded() * (1.0/StepClockRate);
 			++completedMoves;
-			debugPrintf("Simulated a Movement\n");
-			debugPrintf("Virtual Extruder Position is %f\n", cdda->GetVirtualExtruderPosition());
+//			debugPrintf("Simulated a Movement\n");
+//			debugPrintf("Virtual Extruder Position is %f\n", cdda->GetVirtualExtruderPosition());
 			if (cdda->Free())
 			{
 				++numLookaheadUnderruns;

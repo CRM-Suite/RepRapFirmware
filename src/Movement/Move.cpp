@@ -770,17 +770,31 @@ void Move::Exit() noexcept
 		}
 #endif
 
-		if (simulationMode == SimulationMode::debug && reprap.GetDebugFlags(Module::Move).IsBitSet(MoveDebugFlags::SimulateSteppingDrivers))
-		{
-		    while (activeDMs != nullptr)
-		    {
-		        SimulateSteppingDrivers(reprap.GetPlatform());
-		    }
-		    if (rings[0].IsIdle())
-		    {
-		        StopSimulationLogging();
-		    }
-		}
+	    if (simulationMode != SimulationMode::off) // Modified condition
+	    {
+//	    	while (activeDMs != nullptr)
+//			{
+//				SimulateSteppingDrivers(reprap.GetPlatform());
+//			}
+	    	uint32_t simSteps = 0;
+	    	while (activeDMs != nullptr && simSteps++ < 100) {
+	    		// debugPrintf("ActiveDMS high %p\n", (void*)activeDMs);
+	    		SimulateSteppingDrivers(reprap.GetPlatform());
+	    	}
+	    }
+
+//		if (simulationMode == SimulationMode::debug && reprap.GetDebugFlags(Module::Move).IsBitSet(MoveDebugFlags::SimulateSteppingDrivers))
+//		{
+//		    while (activeDMs != nullptr)
+//		    {
+//		        SimulateSteppingDrivers(reprap.GetPlatform());
+//		    }
+//		    if (rings[0].IsIdle())
+//		    {
+//		        StopSimulationLogging();
+//		    }
+//		}
+
 		// Reduce motor current to standby if the rings have been idle for long enough
 		if (   rings[0].IsIdle()
 #if SUPPORT_ASYNC_MOVES
@@ -2796,86 +2810,149 @@ void Move::SetDirection(size_t axisOrExtruder, bool direction) noexcept
 // it is called from the Move task and outputs info on the step timings. It ignores endstops.
 void Move::SimulateSteppingDrivers(Platform& p) noexcept
 {
-	static uint32_t lastStepTime;
-	static bool checkTiming = false;
-	static uint8_t lastDrive = 0;
+    static uint32_t lastStepTime;
+    static bool checkTiming = false;
+    static uint8_t lastDrive = 0;
+    static DriveMovement* lastProcessedDM = nullptr;
+    static void* lastSegments = nullptr;
+    static uint32_t repeatCount = 0;
 
-	DriveMovement *_ecv_null dm = activeDMs;
-	if (dm != nullptr)
-	{
-		// Generating and sending the debug output can take a lot of time, so to avoid shutting out high priority tasks, reduce our priority
-		const unsigned int oldPriority = TaskBase::GetCurrentTaskPriority();
-		TaskBase::SetCurrentTaskPriority(TaskPriority::SpinPriority);
-		const uint32_t dueTime = dm->nextStepTime;
-		while (dm != nullptr && (int32_t)(dueTime >= dm->nextStepTime) >= 0)			// if the next step is due
-		{
-			uint32_t timeDiff;
-			const bool badTiming = checkTiming && dm->drive == lastDrive && ((timeDiff = dm->nextStepTime - lastStepTime) < 10 || timeDiff > 100000000);
-			if (dm->nextStep == 1)
-			{
-				dm->DebugPrint();
-				MoveSegment::DebugPrintList(dm->segments);
-			}
-#if 1
-			if (badTiming || ((uint32_t)dm->nextStep & 255u) == 1u || dm->nextStep + 1 == dm->segmentStepLimit)
-#endif
-			{
-				debugPrintf("%10" PRIu32 " D%u %c ns=%" PRIi32 "%s", dm->nextStepTime, dm->drive, (dm->direction) ? 'F' : 'B', dm->nextStep, (badTiming) ? " *\n" : "\n");
-			}
-			lastDrive = dm->drive;
-			dm = dm->nextDM;
-		}
-		lastStepTime = dueTime;
-		checkTiming = true;
+    // debugPrintf("SimulateSteppingDrivers: activeDMs %p, dueTime %u, timer %u\n",
+    //             (void*)activeDMs, activeDMs ? activeDMs->nextStepTime : 0, StepTimer::GetMovementTimerTicks());
+    DriveMovement *_ecv_null dm = activeDMs;
+    if (dm != nullptr)
+    {
+        const unsigned int oldPriority = TaskBase::GetCurrentTaskPriority();
+        TaskBase::SetCurrentTaskPriority(TaskPriority::SpinPriority);
+        const uint32_t dueTime = dm->nextStepTime;
+        while (dm != nullptr && (int32_t)(dueTime >= dm->nextStepTime) >= 0)
+        {
+            // debugPrintf("Drive index: %u, nextDM: %p, segments: %p\n",
+            //             dm->drive, (void*)dm->nextDM, (void*)dm->segments);
+            uint32_t timeDiff;
+            const bool badTiming = checkTiming && dm->drive == lastDrive &&
+                                  ((timeDiff = dm->nextStepTime - lastStepTime) < 10 || timeDiff > 100000000);
+            if (dm->nextStep == 1)
+            {
+                dm->DebugPrint();
+                MoveSegment::DebugPrintList(dm->segments);
+            }
+            lastDrive = dm->drive;
+            dm = dm->nextDM;
+        }
+        lastStepTime = dueTime;
+        checkTiming = true;
+        // Track positions for X (drive 0), Y (drive 1), Z (drive 2)
+        float xPos = 0.0f, yPos = 0.0f, zPos = 0.0f;
+        for (DriveMovement *_ecv_null dm2 = activeDMs; dm2 != dm; dm2 = dm2->nextDM)
+        {
+            if (unlikely(dm2->state == DMState::starting))
+            {
+                if (dm2->NewSegment(dueTime) != nullptr && dm2->state != DMState::starting)
+                {
+                    (void)dm2->CalcNextStepTime(dueTime);
+                }
+            }
+            else
+            {
+                (void)dm2->CalcNextStepTime(dueTime);
+            }
 
-		for (DriveMovement *_ecv_null dm2 = activeDMs; dm2 != dm; dm2 = dm2->nextDM)
-		{
-			if (unlikely(dm2->state == DMState::starting))
-			{
-				if (dm2->NewSegment(dueTime) != nullptr && dm2->state != DMState::starting)
-				{
-					(void)dm2->CalcNextStepTime(dueTime);				// calculate next step time
-				}
-			}
-			else
-			{
-				(void)dm2->CalcNextStepTime(dueTime);					// calculate next step time
-			}
-		}
+            // Update position for X, Y, or Z based on drive number
+            float position = MotorStepsToMovement(dm2->drive, dm2->currentMotorPosition);
+            if (dm2->drive == 0)
+            {
+                xPos = position;
+            }
+            else if (dm2->drive == 1)
+            {
+                yPos = position;
+            }
+            else if (dm2->drive == 2)
+            {
+                zPos = position;
+            }
+        }
 
-		// Remove those drives from the list, update the direction pins where necessary, and re-insert them so as to keep the list in step-time order.
-		DriveMovement *_ecv_null dmToInsert = activeDMs;							// head of the chain we need to re-insert
-		activeDMs = dm;													// remove the chain from the list
-		while (dmToInsert != dm)										// note that both of these may be nullptr
-		{
-			DriveMovement *_ecv_null const nextToInsert = dmToInsert->nextDM;
-			if (dmToInsert->state >= DMState::firstMotionState)
-			{
-				dmToInsert->directionChanged = false;
-				InsertDM(dmToInsert);
-			}
-			dmToInsert = nextToInsert;
-		}
-		TaskBase::SetCurrentTaskPriority(oldPriority);
+        // Print virtual positions after processing all DriveMovements
+        debugPrintf("Positions: X: %.2f, Y: %.2f, Z: %.2f\n", (double)xPos, (double)yPos, (double)zPos);
 
-		if (simulationLoggingEnabled)
-		{
-		    uint32_t timeSinceLastSample = dueTime - lastSimulationSampleTime;
-		    uint32_t timestepClocks = (uint32_t)(simulationTimestep * StepClockRate);
-		    if (timeSinceLastSample >= timestepClocks)
-		    {
-		        LogSimulationData(dueTime);
-		        lastSimulationSampleTime = dueTime;
-		    }
-		}
 
-	}
+        for (DriveMovement *_ecv_null dm2 = activeDMs; dm2 != dm; dm2 = dm2->nextDM)
+        {
+            // debugPrintf("Drive index2: %u, nextDM: %p, segments: %p\n",
+            //             dm2->drive, (void*)dm2->nextDM, (void*)dm2->segments);
+            if (unlikely(dm2->state == DMState::starting))
+            {
+                if (dm2->NewSegment(dueTime) != nullptr && dm2->state != DMState::starting)
+                {
+                    // debugPrintf("Drive index1: %u\n", dm2->drive);
+                    (void)dm2->CalcNextStepTime(dueTime);
+                }
+            }
+            else
+            {
+                (void)dm2->CalcNextStepTime(dueTime);
+            }
+        }
 
-	if (activeDMs == nullptr)
-	{
-		checkTiming = false;		// don't check the timing of the first step in the next move
-	}
+        DriveMovement *_ecv_null dmToInsert = activeDMs;
+        activeDMs = dm;
+        // debugPrintf("ActiveDMS %p\n", (void*)activeDMs);
+        while (dmToInsert != dm)
+        {
+            DriveMovement *_ecv_null const nextToInsert = dmToInsert->nextDM;
+            if (dmToInsert->state >= DMState::firstMotionState)
+            {
+                // Check if this DriveMovement is stuck (same pointer and segments)
+                if (dmToInsert == lastProcessedDM && dmToInsert->segments == lastSegments)
+                {
+                    repeatCount++;
+                    // debugPrintf("Warning: Repeated DM %p, drive %u, segments %p, repeat count: %u\n",
+                    //             (void*)dmToInsert, dmToInsert->drive, (void*)dmToInsert->segments, repeatCount);
+                    if (repeatCount >= 2) // Very low threshold to act quickly
+                    {
+                        // debugPrintf("Error: DM %p stuck, setting idle to keep activeDMs null\n",
+                        //             (void*)dmToInsert);
+                        dmToInsert->state = DMState::idle;
+                        MoveSegment::ReleaseAll(const_cast<MoveSegment*&>(dmToInsert->segments));
+                        dmToInsert->segments = nullptr;
+                        repeatCount = 0;
+                        continue; // Skip InsertDM to keep activeDMs null
+                    }
+                }
+                else
+                {
+                    lastProcessedDM = dmToInsert;
+                    lastSegments = dmToInsert->segments;
+                    repeatCount = 0;
+                }
 
+                dmToInsert->directionChanged = false;
+                InsertDM(dmToInsert);
+            }
+            dmToInsert = nextToInsert;
+        }
+        TaskBase::SetCurrentTaskPriority(oldPriority);
+
+        if (simulationLoggingEnabled)
+        {
+            uint32_t timeSinceLastSample = dueTime - lastSimulationSampleTime;
+            uint32_t timestepClocks = (uint32_t)(simulationTimestep * StepClockRate);
+            if (timeSinceLastSample >= timestepClocks)
+            {
+                LogSimulationData(dueTime);
+                lastSimulationSampleTime = dueTime;
+            }
+        }
+    }
+
+    if (activeDMs == nullptr)
+    {
+        checkTiming = false;
+        lastProcessedDM = nullptr;
+        repeatCount = 0;
+    }
 }
 
 // This is called when we abort a move because we have hit an endstop.
