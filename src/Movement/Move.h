@@ -521,6 +521,9 @@ private:
 	uint32_t lastSimulationSampleTime = 0;
 	float simulationTimestep = 0.01;
 	bool simulationLoggingEnabled = false;
+	float simulatedPositions[3]; // X, Y, Z positions for drives 0, 1, 2
+    FileStore* positionLogFile; // File for CSV output
+    bool positionLoggingEnabled; // Flag to control logging
 
 #if SUPPORT_SCANNING_PROBES
 	struct ScanningProbeControl

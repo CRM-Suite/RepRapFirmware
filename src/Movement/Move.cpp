@@ -361,6 +361,10 @@ Move::Move() noexcept
 #endif
 	  jerkPolicy(0),
 	  numCalibratedFactors(0)
+	  // new members
+	  simulatedPositions{0.0f, 0.0f, 0.0f}, // Initialize positions
+      positionLogFile(nullptr),
+      positionLoggingEnabled(false)
 {
 #if VARIABLE_NUM_DRIVERS
 	numActualDirectDrivers = NumDirectDrivers;						// assume they are all available until we know otherwise
@@ -1186,55 +1190,92 @@ void Move::Simulate(SimulationMode simMode) noexcept
 	}
 }
 
+// new function
 void Move::StartSimulationLogging(String<StringLength256>& reply) noexcept
 {
-    if (simulationFile != nullptr) {
-        reply.copy("Simulation logging already active");
-        return;
-    }
+    if (!simulationLoggingEnabled)
+    {
+        simulationLoggingEnabled = true;
+        lastSimulationSampleTime = 0;
+        simulationTimestep = 0.01f;
 
-    simulationFile = reprap.GetPlatform().OpenFile("0:/sys", "simulation_data.csv", OpenMode::write, 0);
-    if (simulationFile == nullptr) {
-        reply.copy("Failed to open simulation_data.csv for writing");
-        simulationLoggingEnabled = false;
-        return;
-    }
+        // Open CSV file for position logging
+        positionLogFile = reprap.GetPlatform().OpenFile("0:/sys/simulation_positions.csv", OpenMode::write);
+        if (positionLogFile != nullptr)
+        {
+            positionLoggingEnabled = true;
+            // Write CSV header
+            positionLogFile->Write("Time(s),X(mm),Y(mm),Z(mm)\n");
+            positionLogFile->Flush(); // Ensure header is written
+            reply.printf("Started simulation position logging to 0:/sys/simulation_positions.csv");
+        }
+        else
+        {
+            positionLoggingEnabled = false;
+            reply.printf("Failed to open simulation_positions.csv for writing");
+        }
 
-    const char* header = "t,X,Y,Z\n";
-    simulationFile->Write(header, strlen(header));
-    lastSimulationSampleTime = 0;
-    simulationLoggingEnabled = true;
-    reply.printf("Started simulation logging to simulation_data.csv with timestep %.3f s", (double)simulationTimestep);
+        // Reset positions
+        simulatedPositions[0] = simulatedPositions[1] = simulatedPositions[2] = 0.0f;
+    }
+    else
+    {
+        reply.printf("Simulation logging already active");
+    }
 }
 
+// new function
 void Move::StopSimulationLogging() noexcept
 {
-    if (simulationFile != nullptr) {
-        simulationFile->Close();
-        delete simulationFile;
-        simulationFile = nullptr;
+    if (simulationLoggingEnabled)
+    {
+        simulationLoggingEnabled = false;
+        positionLoggingEnabled = false;
+        if (positionLogFile != nullptr)
+        {
+            positionLogFile->Flush();
+            positionLogFile->Close();
+            positionLogFile = nullptr;
+        }
+        // Reset positions
+        simulatedPositions[0] = simulatedPositions[1] = simulatedPositions[2] = 0.0f;
     }
-    simulationLoggingEnabled = false;
 }
 
+// new function
 void Move::LogSimulationData(uint32_t currentTime) noexcept
 {
-    if (!simulationLoggingEnabled || simulationFile == nullptr) {
-        return;
+    if (positionLoggingEnabled && positionLogFile != nullptr)
+    {
+        // Calculate time in seconds
+        float timeSeconds = (float)currentTime / (float)StepClockRate;
+
+        // Write CSV line: Time,X,Y,Z
+        String<128> csvLine;
+        csvLine.printf("%.3f,%.2f,%.2f,%.2f\n",
+                       (double)timeSeconds,
+                       (double)simulatedPositions[0],
+                       (double)simulatedPositions[1],
+                       (double)simulatedPositions[2]);
+        if (!positionLogFile->Write(csvLine.c_str()))
+        {
+            // Handle write error by stopping logging
+            positionLogFile->Close();
+            positionLogFile = nullptr;
+            positionLoggingEnabled = false;
+            reprap.GetPlatform().Message(WarningMessage, "Failed to write to simulation_positions.csv\n");
+        }
+        else
+        {
+            // Periodically flush to minimize data loss
+            static uint32_t lastFlushTime = 0;
+            if (currentTime - lastFlushTime >= StepClockRate) // Flush every second
+            {
+                positionLogFile->Flush();
+                lastFlushTime = currentTime;
+            }
+        }
     }
-
-    float timeInSeconds = (float)currentTime / (float)StepClockRate;
-    float coords[MaxAxes];
-    GetCurrentMachinePosition(coords, 0);
-
-    String<StringLength256> line;
-    line.printf("%.6f,%.3f,%.3f,%.3f\n",
-                (double)timeInSeconds,
-                (double)coords[X_AXIS],
-                (double)coords[Y_AXIS],
-                (double)coords[Z_AXIS]);
-
-    simulationFile->Write(line.c_str(), line.strlen());
 }
 
 // Adjust the leadscrews
@@ -2843,39 +2884,39 @@ void Move::SimulateSteppingDrivers(Platform& p) noexcept
         lastStepTime = dueTime;
         checkTiming = true;
         // Track positions for X (drive 0), Y (drive 1), Z (drive 2)
-        float xPos = 0.0f, yPos = 0.0f, zPos = 0.0f;
-        for (DriveMovement *_ecv_null dm2 = activeDMs; dm2 != dm; dm2 = dm2->nextDM)
-        {
-            if (unlikely(dm2->state == DMState::starting))
-            {
-                if (dm2->NewSegment(dueTime) != nullptr && dm2->state != DMState::starting)
-                {
-                    (void)dm2->CalcNextStepTime(dueTime);
-                }
-            }
-            else
-            {
-                (void)dm2->CalcNextStepTime(dueTime);
-            }
-
-            // Update position for X, Y, or Z based on drive number
-            float position = MotorStepsToMovement(dm2->drive, dm2->currentMotorPosition);
-            if (dm2->drive == 0)
-            {
-                xPos = position;
-            }
-            else if (dm2->drive == 1)
-            {
-                yPos = position;
-            }
-            else if (dm2->drive == 2)
-            {
-                zPos = position;
-            }
-        }
+//        float xPos = 0.0f, yPos = 0.0f, zPos = 0.0f;
+//        for (DriveMovement *_ecv_null dm2 = activeDMs; dm2 != dm; dm2 = dm2->nextDM)
+//        {
+//            if (unlikely(dm2->state == DMState::starting))
+//            {
+//                if (dm2->NewSegment(dueTime) != nullptr && dm2->state != DMState::starting)
+//                {
+//                    (void)dm2->CalcNextStepTime(dueTime);
+//                }
+//            }
+//            else
+//            {
+//                (void)dm2->CalcNextStepTime(dueTime);
+//            }
+//
+//            // Update position for X, Y, or Z based on drive number
+//            float position = MotorStepsToMovement(dm2->drive, dm2->currentMotorPosition);
+//            if (dm2->drive == 0)
+//            {
+//                xPos = position;
+//            }
+//            else if (dm2->drive == 1)
+//            {
+//                yPos = position;
+//            }
+//            else if (dm2->drive == 2)
+//            {
+//                zPos = position;
+//            }
+//        }
 
         // Print virtual positions after processing all DriveMovements
-        debugPrintf("Positions: X: %.2f, Y: %.2f, Z: %.2f\n", (double)xPos, (double)yPos, (double)zPos);
+//        debugPrintf("Positions: X: %.2f, Y: %.2f, Z: %.2f\n", (double)xPos, (double)yPos, (double)zPos);
 
 
         for (DriveMovement *_ecv_null dm2 = activeDMs; dm2 != dm; dm2 = dm2->nextDM)
