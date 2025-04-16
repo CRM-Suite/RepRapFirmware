@@ -519,8 +519,8 @@ private:
 	// added
 	FileStore* simulationFile = nullptr;
 	uint32_t lastSimulationSampleTime = 0;
-	float simulationTimestep = 0.01;
-	bool simulationLoggingEnabled = false;
+	float simulationTimestep = 0.005;
+	bool simulationLoggingEnabled = false; // Controlled by StartSimulationLogging
 	float simulatedPositions[3]; // X, Y, Z positions for drives 0, 1, 2
     FileStore* positionLogFile; // File for CSV output
     bool positionLoggingEnabled; // Flag to control logging

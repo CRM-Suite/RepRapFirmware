@@ -360,11 +360,11 @@ Move::Move() noexcept
 	  heightController(nullptr),
 #endif
 	  jerkPolicy(0),
-	  numCalibratedFactors(0)
-	  // new members
 	  simulatedPositions{0.0f, 0.0f, 0.0f}, // Initialize positions
       positionLogFile(nullptr),
-      positionLoggingEnabled(false)
+      positionLoggingEnabled(false),
+	  numCalibratedFactors(0)
+
 {
 #if VARIABLE_NUM_DRIVERS
 	numActualDirectDrivers = NumDirectDrivers;						// assume they are all available until we know otherwise
@@ -776,28 +776,16 @@ void Move::Exit() noexcept
 
 	    if (simulationMode != SimulationMode::off) // Modified condition
 	    {
-//	    	while (activeDMs != nullptr)
-//			{
-//				SimulateSteppingDrivers(reprap.GetPlatform());
-//			}
 	    	uint32_t simSteps = 0;
 	    	while (activeDMs != nullptr && simSteps++ < 100) {
 	    		// debugPrintf("ActiveDMS high %p\n", (void*)activeDMs);
 	    		SimulateSteppingDrivers(reprap.GetPlatform());
 	    	}
+			if (rings[0].IsIdle())
+			{
+				StopSimulationLogging();
+			}
 	    }
-
-//		if (simulationMode == SimulationMode::debug && reprap.GetDebugFlags(Module::Move).IsBitSet(MoveDebugFlags::SimulateSteppingDrivers))
-//		{
-//		    while (activeDMs != nullptr)
-//		    {
-//		        SimulateSteppingDrivers(reprap.GetPlatform());
-//		    }
-//		    if (rings[0].IsIdle())
-//		    {
-//		        StopSimulationLogging();
-//		    }
-//		}
 
 		// Reduce motor current to standby if the rings have been idle for long enough
 		if (   rings[0].IsIdle()
@@ -1199,20 +1187,21 @@ void Move::StartSimulationLogging(String<StringLength256>& reply) noexcept
         lastSimulationSampleTime = 0;
         simulationTimestep = 0.01f;
 
-        // Open CSV file for position logging
-        positionLogFile = reprap.GetPlatform().OpenFile("0:/sys/simulation_positions.csv", OpenMode::write);
+        // Open CSV file
+        positionLogFile = reprap.GetPlatform().OpenFile("0:/sys", "simulation_positions.csv", OpenMode::write, 0);
         if (positionLogFile != nullptr)
         {
             positionLoggingEnabled = true;
-            // Write CSV header
             positionLogFile->Write("Time(s),X(mm),Y(mm),Z(mm)\n");
-            positionLogFile->Flush(); // Ensure header is written
+            positionLogFile->Flush();
             reply.printf("Started simulation position logging to 0:/sys/simulation_positions.csv");
+            reprap.GetPlatform().MessageF(GenericMessage, "Simulation logging enabled\n");
         }
         else
         {
             positionLoggingEnabled = false;
             reply.printf("Failed to open simulation_positions.csv for writing");
+            reprap.GetPlatform().MessageF(WarningMessage, "Failed to open CSV file\n");
         }
 
         // Reset positions
@@ -2868,8 +2857,6 @@ void Move::SimulateSteppingDrivers(Platform& p) noexcept
         const uint32_t dueTime = dm->nextStepTime;
         while (dm != nullptr && (int32_t)(dueTime >= dm->nextStepTime) >= 0)
         {
-            // debugPrintf("Drive index: %u, nextDM: %p, segments: %p\n",
-            //             dm->drive, (void*)dm->nextDM, (void*)dm->segments);
             uint32_t timeDiff;
             const bool badTiming = checkTiming && dm->drive == lastDrive &&
                                   ((timeDiff = dm->nextStepTime - lastStepTime) < 10 || timeDiff > 100000000);
@@ -2878,46 +2865,19 @@ void Move::SimulateSteppingDrivers(Platform& p) noexcept
                 dm->DebugPrint();
                 MoveSegment::DebugPrintList(dm->segments);
             }
+			if (dm->drive <= 2) // Only track X, Y, Z
+            {
+                if (dm->state >= DMState::firstMotionState)
+                {
+                    simulatedPositions[dm->drive] = MotorStepsToMovement(dm->drive, dm->currentMotorPosition);
+                }
+            }
+
             lastDrive = dm->drive;
             dm = dm->nextDM;
         }
         lastStepTime = dueTime;
         checkTiming = true;
-        // Track positions for X (drive 0), Y (drive 1), Z (drive 2)
-//        float xPos = 0.0f, yPos = 0.0f, zPos = 0.0f;
-//        for (DriveMovement *_ecv_null dm2 = activeDMs; dm2 != dm; dm2 = dm2->nextDM)
-//        {
-//            if (unlikely(dm2->state == DMState::starting))
-//            {
-//                if (dm2->NewSegment(dueTime) != nullptr && dm2->state != DMState::starting)
-//                {
-//                    (void)dm2->CalcNextStepTime(dueTime);
-//                }
-//            }
-//            else
-//            {
-//                (void)dm2->CalcNextStepTime(dueTime);
-//            }
-//
-//            // Update position for X, Y, or Z based on drive number
-//            float position = MotorStepsToMovement(dm2->drive, dm2->currentMotorPosition);
-//            if (dm2->drive == 0)
-//            {
-//                xPos = position;
-//            }
-//            else if (dm2->drive == 1)
-//            {
-//                yPos = position;
-//            }
-//            else if (dm2->drive == 2)
-//            {
-//                zPos = position;
-//            }
-//        }
-
-        // Print virtual positions after processing all DriveMovements
-//        debugPrintf("Positions: X: %.2f, Y: %.2f, Z: %.2f\n", (double)xPos, (double)yPos, (double)zPos);
-
 
         for (DriveMovement *_ecv_null dm2 = activeDMs; dm2 != dm; dm2 = dm2->nextDM)
         {
@@ -2976,16 +2936,20 @@ void Move::SimulateSteppingDrivers(Platform& p) noexcept
         }
         TaskBase::SetCurrentTaskPriority(oldPriority);
 
-        if (simulationLoggingEnabled)
-        {
-            uint32_t timeSinceLastSample = dueTime - lastSimulationSampleTime;
-            uint32_t timestepClocks = (uint32_t)(simulationTimestep * StepClockRate);
-            if (timeSinceLastSample >= timestepClocks)
-            {
-                LogSimulationData(dueTime);
-                lastSimulationSampleTime = dueTime;
-            }
-        }
+		// Log positions if enabled
+//		p.MessageF(GenericMessage, "simulationLoggingEnabled=%d\n", simulationLoggingEnabled);
+//		if (simulationLoggingEnabled)
+//		{
+		uint32_t timeSinceLastSample = dueTime - lastSimulationSampleTime;
+		uint32_t timestepClocks = (uint32_t)(simulationTimestep * StepClockRate);
+//		debugPrintf("timeSinceLastSample=%u, timestepClocks=%u\n", timeSinceLastSample, timestepClocks);
+		if (timeSinceLastSample >= timestepClocks)
+		{
+//			debugPrintf("trying to save csv data\n");
+			LogSimulationData(dueTime);
+			lastSimulationSampleTime = dueTime;
+		}
+//		}
     }
 
     if (activeDMs == nullptr)
