@@ -1188,6 +1188,7 @@ void Move::StartSimulationLogging(String<StringLength256>& reply) noexcept
         positionLoggingEnabled = true;
         lastSimulationSampleTime = 0;
         simulationTimestep = 0.01f;
+		debugSimulationTime = 0;
 
         // Open CSV file
         positionLogFile = reprap.GetPlatform().OpenFile("0:/sys", "simulation_positions.csv", OpenMode::write, 0);
@@ -1235,7 +1236,7 @@ void Move::StopSimulationLogging() noexcept
 }
 
 // new function
-void Move::LogSimulationData(uint32_t currentTime) noexcept
+void Move::LogSimulationData(float currentTime) noexcept
 {
 //    if (positionLoggingEnabled && positionLogFile != nullptr)
 //	debugPrintf("LogSimulationData() entry, this = %p\n", this);
@@ -1245,11 +1246,11 @@ void Move::LogSimulationData(uint32_t currentTime) noexcept
         // Calculate time in seconds
 //		debugPrintf("logging data...");
         float timeSeconds = (float)currentTime / (float)StepClockRate;
-
+        float simTime = GetSimulationTime();
         // Write CSV line: Time,X,Y,Z
         String<128> csvLine;
         csvLine.printf("%.3f,%.2f,%.2f,%.2f\n",
-                       (double)timeSeconds,
+                       (double)currentTime,
                        (double)simulatedPositions[0],
                        (double)simulatedPositions[1],
                        (double)simulatedPositions[2]);
@@ -1958,19 +1959,21 @@ void Move::AddLinearSegments(size_t logicalDrive, uint32_t startTime, const Prep
 			const uint32_t segStartTime = tail->GetStartTime();
 			const uint32_t endTime = segStartTime + tail->GetDuration();
 			if ((int32_t)(startTime - endTime) < 0)										// if the segments we want to add start before this segment ends
-			{
-				if (tail->GetFlags().executing)
-				{
-					// Error, the segment we are trying to add overlaps an executing one
-					const StringRef& dbgRef = Platform::genericDebugBuffer.GetRef();
-					dbgRef.printf("Code 3 move error: new: start=%" PRIu32 " overlap=%" PRIu32 " time now=%" PRIu32 ", existing: ",
-									startTime, segStartTime + tail->GetDuration() - startTime, StepTimer::GetMovementTimerTicks());
-					tail->AppendDetails(dbgRef);
-					dbgRef.cat('\n');
-					Platform::shouldTurnOffHeaters = true;
-					Platform::hasGenericDebug = true;
-					StepErrorHalt();
-					return;
+			{	
+				if (simulationMode != SimulationMode::debug) {
+					if (tail->GetFlags().executing)
+					{
+						// Error, the segment we are trying to add overlaps an executing one
+						const StringRef& dbgRef = Platform::genericDebugBuffer.GetRef();
+						dbgRef.printf("Code 3 move error from Move.cpp: new: start=%" PRIu32 " overlap=%" PRIu32 " time now=%" PRIu32 ", existing: ",
+										startTime, segStartTime + tail->GetDuration() - startTime, StepTimer::GetMovementTimerTicks());
+						tail->AppendDetails(dbgRef);
+						dbgRef.cat('\n');
+						Platform::shouldTurnOffHeaters = true;
+						Platform::hasGenericDebug = true;
+						StepErrorHalt();
+						return;
+					}
 				}
 
 				if ((int32_t)(startTime - segStartTime) > 0)
@@ -2856,54 +2859,47 @@ void Move::SetDirection(size_t axisOrExtruder, bool direction) noexcept
 // it is called from the Move task and outputs info on the step timings. It ignores endstops.
 void Move::SimulateSteppingDrivers(Platform& p) noexcept
 {
-    static uint32_t lastStepTime;
-    static bool checkTiming = false;
-    static uint8_t lastDrive = 0;
-    static DriveMovement* lastProcessedDM = nullptr;
-    static void* lastSegments = nullptr;
-    static uint32_t repeatCount = 0;
+    // Static variables to persist across calls
+    static uint32_t lastStepTime = 0;  // Tracks the last processed dueTime (in ticks)
 
-    // debugPrintf("SimulateSteppingDrivers: activeDMs %p, dueTime %u, timer %u\n",
-    //             (void*)activeDMs, activeDMs ? activeDMs->nextStepTime : 0, StepTimer::GetMovementTimerTicks());
+    // Assume debugSimulationTime is a member variable defined elsewhere, e.g., float debugSimulationTime = 0.0;
+
     DriveMovement *_ecv_null dm = activeDMs;
     if (dm != nullptr)
     {
         const unsigned int oldPriority = TaskBase::GetCurrentTaskPriority();
         TaskBase::SetCurrentTaskPriority(TaskPriority::SpinPriority);
-        const uint32_t dueTime = dm->nextStepTime;
-        while (dm != nullptr && (int32_t)(dueTime >= dm->nextStepTime) >= 0)
+        const uint32_t dueTime = dm->nextStepTime;  // Current step's scheduled time (in ticks)
+
+        // Calculate the time increment since the last step (in seconds)
+        if (lastStepTime != 0)  // Skip increment on the first call to avoid a large jump
         {
-            uint32_t timeDiff;
-            const bool badTiming = checkTiming && dm->drive == lastDrive &&
-                                  ((timeDiff = dm->nextStepTime - lastStepTime) < 10 || timeDiff > 100000000);
-            if (dm->nextStep == 1)
-            {
-                dm->DebugPrint();
-                MoveSegment::DebugPrintList(dm->segments);
-            }
-			if (dm->drive <= 2) // Only track X, Y, Z
+            float timeIncrement = (float)(dueTime - lastStepTime) / StepClockRate;
+            debugSimulationTime += timeIncrement;  // Accumulate the total simulation time
+        }
+        lastStepTime = dueTime;  // Update for the next iteration
+
+        // Process all steps scheduled up to this dueTime
+        while (dm != nullptr && (int32_t)(dueTime - dm->nextStepTime) >= 0)
+        {
+            // Simulate step for this DriveMovement (your existing logic)
+            if (dm->drive <= 2) // Example: Only track X, Y, Z
             {
                 if (dm->state >= DMState::firstMotionState)
                 {
                     simulatedPositions[dm->drive] = MotorStepsToMovement(dm->drive, dm->currentMotorPosition);
                 }
             }
-
-            lastDrive = dm->drive;
-            dm = dm->nextDM;
+            dm = dm->nextDM;  // Move to the next DriveMovement
         }
-        lastStepTime = dueTime;
-        checkTiming = true;
 
+        // Update remaining DriveMovements (your existing logic)
         for (DriveMovement *_ecv_null dm2 = activeDMs; dm2 != dm; dm2 = dm2->nextDM)
         {
-            // debugPrintf("Drive index2: %u, nextDM: %p, segments: %p\n",
-            //             dm2->drive, (void*)dm2->nextDM, (void*)dm2->segments);
-            if (unlikely(dm2->state == DMState::starting))
+            if (dm2->state == DMState::starting)
             {
                 if (dm2->NewSegment(dueTime) != nullptr && dm2->state != DMState::starting)
                 {
-                    // debugPrintf("Drive index1: %u\n", dm2->drive);
                     (void)dm2->CalcNextStepTime(dueTime);
                 }
             }
@@ -2913,66 +2909,38 @@ void Move::SimulateSteppingDrivers(Platform& p) noexcept
             }
         }
 
+        // Re-insert processed DriveMovements (simplified version of your logic)
         DriveMovement *_ecv_null dmToInsert = activeDMs;
         activeDMs = dm;
-        // debugPrintf("ActiveDMS %p\n", (void*)activeDMs);
         while (dmToInsert != dm)
         {
             DriveMovement *_ecv_null const nextToInsert = dmToInsert->nextDM;
             if (dmToInsert->state >= DMState::firstMotionState)
             {
-                // Check if this DriveMovement is stuck (same pointer and segments)
-                if (dmToInsert == lastProcessedDM && dmToInsert->segments == lastSegments)
-                {
-                    repeatCount++;
-                    // debugPrintf("Warning: Repeated DM %p, drive %u, segments %p, repeat count: %u\n",
-                    //             (void*)dmToInsert, dmToInsert->drive, (void*)dmToInsert->segments, repeatCount);
-                    if (repeatCount >= 2) // Very low threshold to act quickly
-                    {
-                        // debugPrintf("Error: DM %p stuck, setting idle to keep activeDMs null\n",
-                        //             (void*)dmToInsert);
-                        dmToInsert->state = DMState::idle;
-                        MoveSegment::ReleaseAll(const_cast<MoveSegment*&>(dmToInsert->segments));
-                        dmToInsert->segments = nullptr;
-                        repeatCount = 0;
-                        continue; // Skip InsertDM to keep activeDMs null
-                    }
-                }
-                else
-                {
-                    lastProcessedDM = dmToInsert;
-                    lastSegments = dmToInsert->segments;
-                    repeatCount = 0;
-                }
-
-                dmToInsert->directionChanged = false;
                 InsertDM(dmToInsert);
             }
             dmToInsert = nextToInsert;
         }
+
         TaskBase::SetCurrentTaskPriority(oldPriority);
 
-		// Log positions if enabled
-//		p.MessageF(GenericMessage, "simulationLoggingEnabled=%d\n", simulationLoggingEnabled);
-//		if (simulationLoggingEnabled)
-//		{
-		uint32_t timeSinceLastSample = dueTime - lastSimulationSampleTime;
-		uint32_t timestepClocks = (uint32_t)(simulationTimestep * StepClockRate);
-//		debugPrintf("timeSinceLastSample=%u, timestepClocks=%u\n", timeSinceLastSample, timestepClocks);
-		if (timeSinceLastSample >= timestepClocks)
-		{
-//			debugPrintf("trying to save csv data\n");
-			LogSimulationData(dueTime);
-			lastSimulationSampleTime = dueTime;
-		}
-//		}
+        // Optional: Log simulation data using debugSimulationTime
+        static uint32_t lastSimulationSampleTime = 0;
+        uint32_t timeSinceLastSample = dueTime - lastSimulationSampleTime;
+        uint32_t timestepClocks = (uint32_t)(simulationTimestep * StepClockRate);  // Define simulationTimestep elsewhere
+        if (timeSinceLastSample >= timestepClocks)
+        {
+            LogSimulationData(debugSimulationTime);  // Use accumulated time for logging
+            lastSimulationSampleTime = dueTime;
+        }
     }
 
+    // Reset conditions when no active DriveMovements remain
     if (activeDMs == nullptr)
     {
-        checkTiming = false;
-        lastProcessedDM = nullptr;
-        repeatCount = 0;
+        lastStepTime = 0;  // Reset for the next simulation cycle
+        // Optionally reset debugSimulationTime here if you want it to restart per simulation run
+        // debugSimulationTime = 0.0;
     }
 }
 

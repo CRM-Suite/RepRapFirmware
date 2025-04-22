@@ -1607,7 +1607,8 @@ void DDA::Prepare(DDARing& ring, uint32_t prepareAdvanceTime, SimulationMode sim
 		afterPrepare.moveStartTime = now + prepareAdvanceTime;
 	}
 
-	if (simMode < SimulationMode::normal)
+	// if (simMode < SimulationMode::normal)
+	if (simMode != SimulationMode::off) // SimulationMode combination
 	{
 #if SUPPORT_CAN_EXPANSION
 		CanMotion::StartMovement();

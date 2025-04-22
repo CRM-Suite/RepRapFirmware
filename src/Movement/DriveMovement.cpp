@@ -314,7 +314,7 @@ static inline motioncalc_t fastLimSqrtm(motioncalc_t f) noexcept
 bool DriveMovement::LogStepError(uint8_t type, float info, const MoveSegment *seg) noexcept
 {
 	const StringRef& dbgRef = Platform::genericDebugBuffer.GetRef();
-	dbgRef.printf("Code %u move error: info=%.3g, seg: ", type, (double)info);
+	dbgRef.printf("Code %u move error from LogStepError: info=%.3g, seg: ", type, (double)info);
 	if (seg != nullptr)
 	{
 		seg->AppendDetails(dbgRef);

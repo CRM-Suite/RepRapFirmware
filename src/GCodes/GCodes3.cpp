@@ -298,6 +298,7 @@ GCodeResult GCodes::SimulateFile(GCodeBuffer& gb, const StringRef &reply, const 
 		#endif
 //		        simulationMode = SimulationMode::normal;
 		        simulationMode = SimulationMode::debug;
+//				simulationMode = SimulationMode::partial;
 
 		        // Start simulation logging
 		        String<StringLength256> logReply;

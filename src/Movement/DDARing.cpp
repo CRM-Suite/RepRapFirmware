@@ -229,6 +229,7 @@ uint32_t DDARing::Spin(uint32_t prepareAdvanceTime, SimulationMode simulationMod
 
 	// If we are simulating, simulate completion of the current move
 	if (simulationMode >= SimulationMode::normal)
+	// if (simulationMode != SimulationMode::off) // SimulationMode combination
 	{
 		// Simulate completion of one move
 		if (cdda->IsCommitted())

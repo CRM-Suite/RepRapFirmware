@@ -131,7 +131,7 @@ public:
 	void Simulate(SimulationMode simMode) noexcept;
 	void StartSimulationLogging(String<StringLength256>& reply) noexcept;  // Now public
 	void StopSimulationLogging() noexcept;  // Likely already public or should be
-	void LogSimulationData(uint32_t currentTime) noexcept;  // If used externally, make public too
+	void LogSimulationData(float currentTime) noexcept;  // If used externally, make public too
 
 	GCodeResult ConfigureLocalDriver(GCodeBuffer& gb, const StringRef& reply, uint8_t drive) THROWS(GCodeException);	// Deal with M569 for one local driver
 	GCodeResult ConfigureLocalDriverBasicParameters(GCodeBuffer& gb, const StringRef& reply, uint8_t drive) THROWS(GCodeException)
@@ -519,11 +519,12 @@ private:
 	// added
 	FileStore* simulationFile = nullptr;
 	uint32_t lastSimulationSampleTime = 0;
-	float simulationTimestep = 0.005;
+	float simulationTimestep = 0.0001;
 	bool simulationLoggingEnabled = false; // Controlled by StartSimulationLogging
 	float simulatedPositions[3]; // X, Y, Z positions for drives 0, 1, 2
     FileStore* positionLogFile; // File for CSV output
     bool positionLoggingEnabled; // Flag to control logging
+	float debugSimulationTime = 0.0;
 
 #if SUPPORT_SCANNING_PROBES
 	struct ScanningProbeControl
