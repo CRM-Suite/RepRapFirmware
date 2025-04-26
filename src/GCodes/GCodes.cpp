@@ -5796,7 +5796,7 @@ bool GCodes::EvaluateValueForDisplay(const char *_ecv_array str, ExpressionValue
 #endif
 
 //Custom G100 for Test
-GCodeResult GCodes::HandleG100(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException)
+GCodeResult GCodes::HandleG100() THROWS(GCodeException)
 {
 	debugPrintf("Hi from G100");
 	return GCodeResult::ok;
